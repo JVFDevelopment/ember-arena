@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ember Arena — a Souls-like in your browser</title>
+  <meta name="description" content="Dodge, parry the odds and survive waves in a floating voxel arena. A browser Souls-like by Koala.">
+  <meta name="theme-color" content="#05060d">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js" } }</script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div class="vignette" id="hurt"></div>
+
+  <div class="hud" id="hud" hidden>
+    <div class="bars">
+      <div class="bar hp"><i class="ghost"></i><i class="fill"></i></div>
+      <div class="bar st"><i class="fill"></i></div>
+      <div class="flasks" id="flasks"></div>
+    </div>
+    <div class="wave" id="wave">Wave 1</div>
+    <div class="score"><b id="score">0</b><span id="mult"></span></div>
+    <div class="boss" id="boss" hidden><span id="boss-name">The Warden</span><div class="bar"><i class="ghost"></i><i class="fill"></i></div></div>
+    <div class="reticle" id="reticle" hidden></div>
+    <div id="numbers"></div>
+    <div class="banner" id="banner"></div>
+  </div>
+
+  <div class="screen" id="title">
+    <p class="eyebrow">A Souls-like by Koala</p>
+    <h1>Ember <span>Arena</span></h1>
+    <p class="sub">Survive the waves. Read the tells. Roll through everything.</p>
+    <button id="start">Enter the arena</button>
+    <dl class="controls">
+      <div><dt>WASD</dt><dd>Move</dd></div>
+      <div><dt>Mouse</dt><dd>Camera</dd></div>
+      <div><dt>Left click</dt><dd>Light attack (combo)</dd></div>
+      <div><dt>Right click</dt><dd>Heavy attack</dd></div>
+      <div><dt>Space</dt><dd>Roll (invincible)</dd></div>
+      <div><dt>Q / Middle</dt><dd>Lock on</dd></div>
+      <div><dt>R</dt><dd>Drink flask</dd></div>
+      <div><dt>Esc</dt><dd>Pause</dd></div>
+    </dl>
+    <p class="best" id="best"></p>
+  </div>
+
+  <div class="screen" id="paused" hidden>
+    <h2>Paused</h2>
+    <button id="resume">Resume</button>
+  </div>
+
+  <div class="screen dead" id="dead" hidden>
+    <h2 class="fallen">You have fallen</h2>
+    <p class="stats" id="stats"></p>
+    <button id="retry">Rise again</button>
+  </div>
+
+  <a class="credit" href="https://mistrkoala.netlify.app" target="_blank" rel="noopener">by Koala</a>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
