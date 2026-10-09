@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js" } }</script>
+  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
 </head>
 <body>
   <canvas id="game"></canvas>
@@ -41,11 +41,19 @@
       <div><dt>Left click</dt><dd>Light attack (combo)</dd></div>
       <div><dt>Right click</dt><dd>Heavy attack</dd></div>
       <div><dt>Space</dt><dd>Roll (invincible)</dd></div>
+      <div><dt>F</dt><dd>Parry, then riposte</dd></div>
+      <div><dt>Shift</dt><dd>Sprint</dd></div>
       <div><dt>Q / Middle</dt><dd>Lock on</dd></div>
       <div><dt>R</dt><dd>Drink flask</dd></div>
       <div><dt>Esc</dt><dd>Pause</dd></div>
     </dl>
     <p class="best" id="best"></p>
+  </div>
+
+  <div class="screen boons" id="boons" hidden>
+    <p class="eyebrow">Wave cleared</p>
+    <h2>Choose a boon</h2>
+    <div class="boon-list" id="boon-list"></div>
   </div>
 
   <div class="screen" id="paused" hidden>

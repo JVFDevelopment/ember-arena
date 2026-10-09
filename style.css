@@ -54,5 +54,18 @@ button:hover { filter: brightness(1.1); transform: translateY(-2px); }
 .best, .stats { font: 500 14px "JetBrains Mono", monospace; color: var(--muted); line-height: 1.7; }
 .fallen { color: var(--red); font-family: "Space Grotesk"; letter-spacing: .12em; text-transform: uppercase; text-shadow: 0 0 40px rgba(255, 60, 80, .6); animation: fall-in 2s ease-out; }
 @keyframes fall-in { from { opacity: 0; letter-spacing: .4em; } }
+.boon-list { display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); gap: 16px; margin-top: 8px; }
+.boon {
+  display: grid; gap: 8px; justify-items: start; text-align: left; padding: 22px; border-radius: 16px;
+  background: rgba(20, 16, 30, .85); color: var(--fg); border: 1px solid rgba(255, 174, 61, .3); box-shadow: none;
+  font: 500 14px "Space Grotesk", sans-serif; letter-spacing: 0; animation: boon-in .5s cubic-bezier(.16,1,.3,1) both;
+}
+.boon:nth-child(2) { animation-delay: .08s; } .boon:nth-child(3) { animation-delay: .16s; }
+.boon:hover { border-color: var(--gold); transform: translateY(-4px); filter: none; box-shadow: 0 16px 40px -18px var(--ember); }
+.boon kbd { font: 700 11px "JetBrains Mono", monospace; color: var(--gold); border: 1px solid rgba(255, 174, 61, .4); border-radius: 5px; padding: 2px 7px; }
+.boon b { font-size: 20px; }
+.boon span { color: var(--muted); line-height: 1.4; }
+@keyframes boon-in { from { opacity: 0; transform: translateY(18px); } }
+.controls { grid-template-columns: repeat(5, auto); }
 .credit { position: fixed; right: 16px; bottom: 12px; font: 500 12px "JetBrains Mono", monospace; color: var(--muted); text-decoration: none; }
 .credit:hover { color: var(--mint); }

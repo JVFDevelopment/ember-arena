@@ -1,4 +1,9 @@
 import * as THREE from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { sfx, unlockAudio } from "./audio.js";
 
 // ============================================================ helpers
 const $ = (s) => document.querySelector(s);
@@ -17,7 +22,7 @@ const C = { mint: 0x7cf7c9, purple: 0x8a7bff, pink: 0xff6fb5, ember: 0xff6a3d, g
 // ============================================================ renderer / scene
 const canvas = $("#game");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -25,13 +30,27 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05060d);
 scene.fog = new THREE.Fog(0x05060d, 35, 95);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 250);
+// bloom makes the sword, embers and telegraphs glow; switched off automatically if frames drop
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.75, 0.55, 0.82);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+let useBloom = !new URLSearchParams(location.search).has("nobloom");
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
+  composer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
 addEventListener("resize", resize);
 resize();
+
+// moon + sky tint (turns blood-red during boss waves)
+const skyCol = new THREE.Color(0x05060d), bossSky = new THREE.Color(0x1a0508), calmSky = new THREE.Color(0x05060d);
+const moon = new THREE.Mesh(new THREE.CircleGeometry(9, 48), new THREE.MeshBasicMaterial({ color: 0xffe6c8, fog: false }));
+moon.position.set(-40, 34, -70);
+scene.add(moon);
 
 scene.add(new THREE.HemisphereLight(0xa99cff, 0x2a1a20, 1.7));
 const sun = new THREE.DirectionalLight(0xffe2c4, 2.6);
@@ -44,6 +63,7 @@ scene.add(sun);
 
 // ============================================================ arena
 const box = new THREE.BoxGeometry(1, 1, 1);
+let runeRing;
 {
   const cells = [];
   for (let x = -ARENA_R - 1; x <= ARENA_R + 1; x++) for (let z = -ARENA_R - 1; z <= ARENA_R + 1; z++) {
@@ -64,7 +84,7 @@ const box = new THREE.BoxGeometry(1, 1, 1);
   floor.receiveShadow = true;
   scene.add(floor);
   // glowing rune ring
-  const ring = new THREE.Mesh(new THREE.RingGeometry(10.7, 11.3, 96), new THREE.MeshBasicMaterial({ color: C.purple, transparent: true, opacity: 0.35 }));
+  const ring = runeRing = new THREE.Mesh(new THREE.RingGeometry(10.7, 11.3, 96), new THREE.MeshBasicMaterial({ color: C.purple, transparent: true, opacity: 0.35 }));
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.02;
   scene.add(ring);
@@ -122,6 +142,31 @@ for (let i = 0; i < 14; i++) {
   r.userData = { s: rand(0.1, 0.4), p: Math.random() * TAU };
   scene.add(r);
   rocks.push(r);
+}
+
+{ const halo = glowSprite(0xffd8a8, 70, 0.35); halo.position.z = -1; moon.add(halo); }
+
+// embers drifting up off the arena (one Points object, updated in place)
+const EMBERS = 260;
+const emberPos = new Float32Array(EMBERS * 3), emberVel = new Float32Array(EMBERS);
+const resetEmber = (i, y = 0) => {
+  const a = Math.random() * TAU, r = Math.sqrt(Math.random()) * ARENA_R;
+  emberPos.set([Math.cos(a) * r, y, Math.sin(a) * r], i * 3);
+  emberVel[i] = rand(0.6, 2.2);
+};
+for (let i = 0; i < EMBERS; i++) resetEmber(i, Math.random() * 14);
+const emberGeo = new THREE.BufferGeometry();
+emberGeo.setAttribute("position", new THREE.BufferAttribute(emberPos, 3));
+const embers = new THREE.Points(emberGeo, new THREE.PointsMaterial({ map: glowTex, color: 0xff8a4a, size: 0.35, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+scene.add(embers);
+function updateEmbers(dt) {
+  for (let i = 0; i < EMBERS; i++) {
+    const k = i * 3;
+    emberPos[k + 1] += emberVel[i] * dt;
+    emberPos[k] += Math.sin(time * 0.8 + i) * 0.3 * dt;
+    if (emberPos[k + 1] > 14) resetEmber(i);
+  }
+  emberGeo.attributes.position.needsUpdate = true;
 }
 
 // ============================================================ particles
@@ -192,11 +237,12 @@ function makeKnight() {
   const guard = part(0.4, 0.08, 0.08, C.gold, C.gold, 0.5); guard.position.z = 0.2; sword.add(guard);
   const blade = part(0.08, 0.06, 1.5, C.mint, C.mint, 2.2); blade.position.z = 0.98; sword.add(blade);
   const shield = part(0.12, 0.7, 0.55, 0x3b2f6b); shield.position.set(-0.55, 1.15, 0.05);
+  const boss = part(0.14, 0.2, 0.2, C.gold, C.gold, 0.6); boss.position.set(-0.07, 0, 0); shield.add(boss);
   body.add(legL, legR, torso, belt, head, visor, plume, cape, armPivot, shield);
   const swordGlow = glowSprite(C.mint, 1.4, 0.0);
   swordGlow.position.z = 1.2;
   sword.add(swordGlow);
-  g.userData = { body, legL, legR, armPivot, cape, swordGlow, blade };
+  g.userData = { body, legL, legR, armPivot, cape, swordGlow, blade, shield };
   return g;
 }
 
@@ -249,11 +295,93 @@ const player = {
   mesh: makeKnight(), pos: new THREE.Vector3(), vel: new THREE.Vector3(), facing: 0,
   hp: 100, maxHp: 100, st: 100, maxSt: 100, stDelay: 0, flasks: 3,
   state: "free", t: 0, atk: null, combo: 0, buffer: null, bufferT: 0, hitSet: new Set(), iframe: false, rollDir: new THREE.Vector3(), healed: false,
+  parrying: false, maxFlasks: 3,
+  // boons stack on these
+  buffs: { dmg: 1, rollCost: 1, taken: 1, regen: 1, speed: 1, lifesteal: 0, emberBlade: false, riposte: 3 },
 };
 scene.add(player.mesh);
 const slashFx = sector(3.2, 2.2, C.mint, 0);
 slashFx.position.y = 1.1;
 scene.add(slashFx);
+
+// sword trail: a ribbon through the blade's recent positions, rebuilt only while swinging
+const TRAIL = 14;
+const trailPos = new Float32Array(TRAIL * 2 * 3), trailAlpha = new Float32Array(TRAIL * 2);
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute("position", new THREE.BufferAttribute(trailPos, 3));
+trailGeo.setAttribute("alpha", new THREE.BufferAttribute(trailAlpha, 1));
+const trailIdx = [];
+for (let i = 0; i < TRAIL - 1; i++) { const a = i * 2; trailIdx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+trailGeo.setIndex(trailIdx);
+const trail = new THREE.Mesh(trailGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  uniforms: { color: { value: new THREE.Color(C.mint).multiplyScalar(2) } },
+  vertexShader: "attribute float alpha; varying float vA; void main(){ vA = alpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
+  fragmentShader: "uniform vec3 color; varying float vA; void main(){ gl_FragColor = vec4(color * vA, vA); }",
+}));
+trail.frustumCulled = false;
+scene.add(trail);
+const trailPts = []; // [{ base, tip }] newest first
+const _tb = new THREE.Vector3(), _tt = new THREE.Vector3();
+function updateTrail(active, dt) {
+  const { blade } = player.mesh.userData;
+  if (active) {
+    blade.localToWorld(_tb.set(0, 0, -0.6));
+    blade.localToWorld(_tt.set(0, 0, 0.8));
+    trailPts.unshift({ base: _tb.clone(), tip: _tt.clone(), life: 1 });
+  }
+  for (const p of trailPts) p.life -= dt * 7;
+  while (trailPts.length > TRAIL || (trailPts.length && trailPts[trailPts.length - 1].life <= 0)) trailPts.pop();
+  trail.visible = trailPts.length > 1;
+  if (!trail.visible) return;
+  for (let i = 0; i < TRAIL; i++) {
+    const p = trailPts[Math.min(i, trailPts.length - 1)];
+    trailPos.set([p.base.x, p.base.y, p.base.z], i * 6);
+    trailPos.set([p.tip.x, p.tip.y, p.tip.z], i * 6 + 3);
+    const a = i < trailPts.length ? Math.max(0, p.life) * (1 - i / TRAIL) * 0.8 : 0;
+    trailAlpha[i * 2] = a * 0.2; trailAlpha[i * 2 + 1] = a;
+  }
+  trailGeo.attributes.position.needsUpdate = trailGeo.attributes.alpha.needsUpdate = true;
+}
+
+// ============================================================ boons (pick 1 of 3 between waves)
+const BOONS = [
+  { id: "whetstone", name: "Whetstone", desc: "+20% damage", apply: (b) => (b.dmg *= 1.2) },
+  { id: "feather", name: "Featherstep", desc: "Rolls cost 35% less stamina", apply: (b) => (b.rollCost *= 0.65) },
+  { id: "flask", name: "Deep Flask", desc: "+1 flask, refilled now", apply: () => { player.maxFlasks++; player.flasks = player.maxFlasks; } },
+  { id: "leech", name: "Bloodthirst", desc: "Heal 3 HP per hit", apply: (b) => (b.lifesteal += 3) },
+  { id: "iron", name: "Iron Skin", desc: "Take 20% less damage", apply: (b) => (b.taken *= 0.8) },
+  { id: "wind", name: "Second Wind", desc: "+40% stamina regen", apply: (b) => (b.regen *= 1.4) },
+  { id: "haste", name: "Swift Hands", desc: "Attacks 15% faster", apply: (b) => (b.speed *= 1.15) },
+  { id: "ember", name: "Ember Blade", desc: "Heavy attacks erupt in fire", apply: (b) => (b.emberBlade = true), once: true },
+  { id: "vigor", name: "Vigor", desc: "+25 max HP, healed fully", apply: () => { player.maxHp += 25; player.hp = player.maxHp; } },
+  { id: "riposte", name: "Executioner", desc: "Ripostes deal 4x damage", apply: (b) => (b.riposte = 4), once: true },
+];
+let boonChoices = [], taken = new Set();
+function offerBoons() {
+  const pool = BOONS.filter((b) => !(b.once && taken.has(b.id)));
+  boonChoices = pool.sort(() => Math.random() - 0.5).slice(0, 3);
+  $("#boon-list").replaceChildren(...boonChoices.map((b, i) => {
+    const btn = document.createElement("button");
+    btn.className = "boon";
+    btn.innerHTML = `<kbd>${i + 1}</kbd><b>${b.name}</b><span>${b.desc}</span>`;
+    btn.addEventListener("click", () => pickBoon(i));
+    return btn;
+  }));
+  game = "boon";
+  $("#boons").hidden = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function pickBoon(i) {
+  const b = boonChoices[i];
+  if (!b || game !== "boon") return;
+  b.apply(player.buffs);
+  taken.add(b.id);
+  sfx("boon");
+  $("#boons").hidden = true;
+  play();
+  waveTimer = 1.2;
+}
 
 const ATTACKS = {
   light: { cost: 14, active: [0.08, 0.2], total: 0.42, dmg: 22, poise: 22, range: 2.8, arc: 2.0, lunge: 4 },
@@ -269,8 +397,10 @@ const keys = new Set();
 // ============================================================ input
 addEventListener("keydown", (e) => {
   keys.add(e.code);
+  if (game === "boon" && /^Digit[123]$/.test(e.code)) return pickBoon(+e.code.slice(5) - 1);
   if (game !== "play") return;
   if (e.code === "Space") { e.preventDefault(); queue("roll"); }
+  if (e.code === "KeyF") queue("parry");
   if (e.code === "KeyQ") toggleLock();
   if (e.code === "KeyR") queue("heal");
   if (e.code === "Escape") pause();
@@ -330,13 +460,13 @@ function drawHud() {
   hud.st.style.transform = `scaleX(${player.st / player.maxSt})`;
   if (hud.flaskCount !== player.flasks) { // only touch the DOM when it changes
     hud.flaskCount = player.flasks;
-    hud.flasks.replaceChildren(...[0, 1, 2].map((i) => Object.assign(document.createElement("i"), { className: i < player.flasks ? "" : "used" })));
+    hud.flasks.replaceChildren(...Array.from({ length: player.maxFlasks }, (_, i) => i).map((i) => Object.assign(document.createElement("i"), { className: i < player.flasks ? "" : "used" })));
   }
   hud.score.textContent = score.toLocaleString();
   hud.mult.textContent = mult > 1 ? `x${mult} streak` : "";
   const boss = enemies.find((e) => e.t.boss && !e.dead);
   hud.boss.hidden = !boss;
-  if (boss) hud.bossFill.style.transform = hud.bossGhost.style.transform = `scaleX(${boss.hp / boss.t.hp})`;
+  if (boss) hud.bossFill.style.transform = hud.bossGhost.style.transform = `scaleX(${Math.max(0, boss.hp / boss.maxHp)})`;
   const s = lock && !lock.dead ? screenOf(lock.pos, 1.3 * lock.t.scale) : null;
   hud.reticle.hidden = !s;
   if (s) hud.reticle.style.transform = `translate(${s[0]}px, ${s[1]}px)`;
@@ -361,8 +491,13 @@ function spend(n) {
 
 function startAction(a) {
   const p = player;
-  if (a === "roll") {
-    if (!spend(22)) return;
+  if (a === "parry") {
+    if (!spend(10)) return;
+    p.state = "parry"; p.t = 0;
+    if (lock && !lock.dead) p.facing = yawTo(p.pos, lock.pos);
+  } else if (a === "roll") {
+    if (!spend(22 * p.buffs.rollCost)) return;
+    sfx("roll");
     const dir = moveInput();
     if (dir) p.rollDir.copy(dir); else p.rollDir.set(-Math.sin(p.facing), 0, -Math.cos(p.facing)); // backstep
     p.facing = Math.atan2(p.rollDir.x, p.rollDir.z);
@@ -370,7 +505,7 @@ function startAction(a) {
   } else if (a === "light" || a === "heavy") {
     if (!spend(ATTACKS[a].cost)) return;
     p.combo = p.state === "attack" && a === "light" ? p.combo + 1 : 0;
-    p.state = "attack"; p.atk = ATTACKS[a]; p.atkName = a; p.t = 0; p.hitSet.clear();
+    p.state = "attack"; p.atk = ATTACKS[a]; p.atkName = a; p.t = 0; p.hitSet.clear(); p.swung = false;
     if (lock && !lock.dead) p.facing = yawTo(p.pos, lock.pos);
     else { const dir = moveInput(); if (dir) p.facing = Math.atan2(dir.x, dir.z); }
   } else if (a === "heal") {
@@ -378,6 +513,8 @@ function startAction(a) {
     p.flasks--; p.state = "heal"; p.t = 0; p.healed = false;
   }
 }
+
+const PARRY_WINDOW = [0.03, 0.2], PARRY_TOTAL = 0.5;
 
 function canAct(a) {
   const p = player;
@@ -389,20 +526,22 @@ function canAct(a) {
     return p.t >= p.atk.total - 0.05;
   }
   if (p.state === "roll") return p.t > 0.42 && a !== "heal";
+  if (p.state === "parry") return p.t > PARRY_WINDOW[1] + 0.1;
   return false;
 }
 
 const _fwd = new THREE.Vector3(), _dir = new THREE.Vector3(), _side = new THREE.Vector3(), _off = new THREE.Vector3(), _look = new THREE.Vector3();
 function updatePlayer(dt) {
   const p = player;
-  p.t += dt;
+  p.t += p.state === "attack" ? dt * p.buffs.speed : dt;
   p.bufferT -= dt;
+  p.parrying = p.state === "parry" && p.t >= PARRY_WINDOW[0] && p.t <= PARRY_WINDOW[1];
   if (p.buffer && p.bufferT > 0 && canAct(p.buffer)) { const a = p.buffer; p.buffer = null; startAction(a); }
   if (p.bufferT <= 0) p.buffer = null;
 
   // stamina
   p.stDelay -= dt;
-  if (p.stDelay <= 0 && p.state !== "roll") p.st = Math.min(p.maxSt, p.st + (p.state === "free" ? 45 : 20) * dt);
+  if (p.stDelay <= 0 && p.state !== "roll") p.st = Math.min(p.maxSt, p.st + (p.state === "free" ? 45 : 20) * p.buffs.regen * dt);
 
   const input = moveInput();
   let speed = 0;
@@ -450,6 +589,7 @@ function updatePlayer(dt) {
       armPivot.rotation.z = p.t < s ? 1.3 * side * k : side * (1.3 - 2.8 * k);
       body.rotation.y = side * (p.t < s ? 0.3 * k : 0.3 - 0.7 * k);
     }
+    if (inActive && !p.swung) { p.swung = true; sfx(p.atkName === "heavy" ? "heavySwing" : "swing"); }
     if (inActive) {
       swordGlow.material.opacity = 0.9;
       slashFx.material.opacity = 0.35;
@@ -472,10 +612,17 @@ function updatePlayer(dt) {
     if (p.t > 0.6 && !p.healed) {
       p.healed = true;
       p.hp = Math.min(p.maxHp, p.hp + 45);
+      sfx("flask");
       burst(p.pos.clone().setY(1.4), C.gold, 22, 3, 4);
       number(p.pos, "+45", "big");
     }
     if (p.t > 1.05) p.state = "free";
+  } else if (p.state === "parry") {
+    p.vel.multiplyScalar(Math.exp(-14 * dt));
+    const k = Math.min(1, p.t / 0.06);
+    p.mesh.userData.shield.position.set(-0.35 + 0.2 * k, 1.25 + 0.15 * k, 0.05 + 0.4 * k); // shield thrust forward
+    body.rotation.y = 0.35 * k;
+    if (p.t >= PARRY_TOTAL) p.state = "free";
   } else if (p.state === "hurt") {
     p.vel.multiplyScalar(Math.exp(-8 * dt));
     body.rotation.x = -0.35;
@@ -485,6 +632,8 @@ function updatePlayer(dt) {
     body.rotation.x = -Math.min(1, p.t * 2) * 1.5;
   }
 
+  if (p.state !== "parry") p.mesh.userData.shield.position.set(-0.55, 1.15, 0.05);
+  updateTrail(p.state === "attack" && p.t >= p.atk.active[0] - 0.04 && p.t <= p.atk.active[1] + 0.02, dt);
   p.pos.addScaledVector(p.vel, dt);
   const r = flat(p.pos);
   if (r > ARENA_R - 0.8) p.pos.multiplyScalar((ARENA_R - 0.8) / r);
@@ -492,10 +641,29 @@ function updatePlayer(dt) {
   p.mesh.rotation.y = p.facing;
 }
 
-function hurtPlayer(dmg, from) {
+// returns "parried" | "blocked" | "dodged" | "hit"
+function hurtPlayer(dmg, from, source = null) {
   const p = player;
-  if (p.state === "dead") return;
-  if (p.iframe) { burst(p.pos.clone().setY(1), C.mint, 6, 2, 2); return; }
+  if (p.state === "dead") return "dodged";
+  if (p.iframe) { burst(p.pos.clone().setY(1), C.mint, 6, 2, 2); return "dodged"; }
+  const facingIt = from && Math.abs(angDiff(p.facing, yawTo(p.pos, from))) < 1.3;
+  if (p.parrying && facingIt) {
+    sfx("parry");
+    hitstop = 0.16; shake = Math.max(shake, 0.35);
+    burst(p.pos.clone().setY(1.3).addScaledVector(_fwd.set(Math.sin(p.facing), 0, Math.cos(p.facing)), 0.8), C.gold, 26, 7, 2);
+    number(p.pos, "PARRY", "big");
+    p.facing = yawTo(p.pos, from); // square up for the riposte
+    if (source && !source.t.boss) { source.state = "riposte"; source.st = 0; source.tele && (source.tele.visible = false); }
+    else if (source) { source.poise -= 80; if (source.poise <= 0) { source.poise = source.t.poise; source.state = "riposte"; source.st = 0; } }
+    return "parried";
+  }
+  if (p.state === "parry" && facingIt && p.st > 0) { // late press: a block soaks half
+    dmg = Math.round(dmg * 0.5);
+    p.st -= dmg * 1.5; p.stDelay = 0.6;
+    sfx("block");
+  }
+  dmg = Math.max(1, Math.round(dmg * p.buffs.taken));
+  sfx("hurt");
   p.hp -= dmg;
   number(p.pos, `-${dmg}`, "player");
   shake = Math.max(shake, 0.5);
@@ -504,9 +672,10 @@ function hurtPlayer(dmg, from) {
   hud.hurt.classList.add("on");
   setTimeout(() => hud.hurt.classList.remove("on"), 90);
   mult = 1; multT = 0;
-  if (p.hp <= 0) { p.hp = 0; p.state = "dead"; p.t = 0; setTimeout(die, 1400); return; }
+  if (p.hp <= 0) { p.hp = 0; p.state = "dead"; p.t = 0; sfx("death"); game = "dying"; setTimeout(die, 1600); return "hit"; }
   p.state = "hurt"; p.t = 0;
   if (from) p.vel.subVectors(p.pos, from).setY(0).normalize().multiplyScalar(7);
+  return "hit";
 }
 
 // ============================================================ enemies
@@ -515,21 +684,32 @@ function spawn(type) {
   const a = yawTo(new THREE.Vector3(), player.pos) + Math.PI + rand(-1.4, 1.4);
   const d = rand(11, ARENA_R - 2);
   const e = { type, t, mesh: makeEnemy(type), pos: new THREE.Vector3(Math.sin(a) * d, 0, Math.cos(a) * d), vel: new THREE.Vector3(),
-    hp: t.hp, poise: t.poise, state: "spawn", st: 0, cd: rand(0.5, 1.5), facing: 0, flash: 0, dead: false, move: null, tele: null };
+    hp: t.hp, poise: t.poise, state: "spawn", st: 0, cd: rand(0.5, 1.5), facing: 0, flash: 0, dead: false, move: null, tele: null,
+    flank: rand(-1.1, 1.1) };
+  e.hp = e.maxHp = Math.round(t.hp * (1 + 0.08 * Math.max(0, wave - 1))); // keeps pace with boons
   e.mesh.position.copy(e.pos);
   scene.add(e.mesh);
   burst(e.pos.clone().setY(0.2), t.eye, 20, 4, 6);
   enemies.push(e);
 }
 
-function hitEnemy(e, a, fwd) {
-  const crit = e.state === "stagger";
-  const dmg = Math.round(a.dmg * (crit ? 1.5 : 1) * rand(0.92, 1.08));
+function hitEnemy(e, a, fwd, splash = false) {
+  const b = player.buffs;
+  const riposte = e.state === "riposte", crit = riposte || e.state === "stagger";
+  const dmg = Math.round(a.dmg * b.dmg * (riposte ? b.riposte : crit ? 1.5 : 1) * rand(0.92, 1.08));
   e.hp -= dmg;
   e.flash = 1;
-  number(e.pos, crit ? `${dmg}!` : `${dmg}`, crit ? "big" : "");
-  burst(e.pos.clone().setY(1.2 * e.t.scale), C.ember, a === ATTACKS.heavy ? 26 : 14, 7, 3);
-  hitstop = a === ATTACKS.heavy ? 0.11 : 0.055;
+  number(e.pos, riposte ? `RIPOSTE ${dmg}` : crit ? `${dmg}!` : `${dmg}`, crit ? "big" : "");
+  if (b.lifesteal && !splash) player.hp = Math.min(player.maxHp, player.hp + b.lifesteal);
+  burst(e.pos.clone().setY(1.2 * e.t.scale), C.ember, a === ATTACKS.heavy || riposte ? 26 : 14, 7, 3);
+  if (!splash) sfx(a === ATTACKS.heavy || riposte ? "heavyHit" : "hit");
+  if (riposte) { e.state = "stagger"; e.st = 0.5; }
+  // Ember Blade: heavy hits erupt, scorching others nearby
+  if (b.emberBlade && a === ATTACKS.heavy && !splash) {
+    burst(e.pos.clone().setY(0.4), C.gold, 30, 8, 5);
+    for (const o of enemies) if (o !== e && !o.dead && o.state !== "spawn" && o.pos.distanceTo(e.pos) < 4) hitEnemy(o, EMBER_SPLASH, fwd, true);
+  }
+  hitstop = Math.max(hitstop, riposte ? 0.16 : a === ATTACKS.heavy ? 0.11 : 0.055);
   shake = Math.max(shake, a === ATTACKS.heavy ? 0.45 : 0.22);
   e.vel.copy(fwd).multiplyScalar((a === ATTACKS.heavy ? 9 : 5) / e.t.scale);
   if (e.hp <= 0) return kill(e);
@@ -544,9 +724,13 @@ function kill(e) {
   kills++;
   score += e.t.score * mult;
   mult = Math.min(5, mult + 1); multT = 4;
-  burst(e.pos.clone().setY(1), e.t.eye, e.t.boss ? 80 : 30, e.t.boss ? 10 : 6, 5);
-  if (e.t.boss) { banner("Warden felled"); shake = 1; hitstop = 0.25; }
+  sfx("kill");
+  // crumble: the body bursts into voxels of its own colour
+  burst(e.pos.clone().setY(1 * e.t.scale), e.t.color, e.t.boss ? 90 : 36, e.t.boss ? 9 : 5, 4);
+  burst(e.pos.clone().setY(1.2 * e.t.scale), e.t.eye, e.t.boss ? 40 : 10, 6, 5);
+  if (e.t.boss) { banner("Warden felled"); shake = 1; hitstop = 0.25; bossWave.on = false; }
 }
+const EMBER_SPLASH = { dmg: 20, poise: 30 };
 
 const _to = new THREE.Vector3();
 function updateEnemy(e, dt) {
@@ -557,9 +741,9 @@ function updateEnemy(e, dt) {
   if (ud.arm) ud.arm.rotation.set(0, 0, 0);
 
   if (e.state === "dead") {
-    ud.body.rotation.x = -Math.min(1, e.st * 2.5) * 1.4;
-    e.mesh.position.y = -Math.max(0, e.st - 0.8) * 2;
-    if (e.st > 2) {
+    // shrink away fast: the voxel burst sells the crumble
+    e.mesh.scale.setScalar(e.t.scale * Math.max(0.001, 1 - e.st * 3));
+    if (e.st > 0.4) {
       scene.remove(e.mesh);
       e.mesh.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); // free GPU buffers
       for (const k in e.teles ?? {}) { scene.remove(e.teles[k]); e.teles[k].geometry.dispose(); e.teles[k].material.dispose(); }
@@ -577,20 +761,38 @@ function updateEnemy(e, dt) {
   const turn = (k) => (e.facing += angDiff(e.facing, target) * Math.min(1, k * dt));
   ud.eyeMat.emissiveIntensity = 2;
 
-  if (e.state === "stagger") {
+  // Warden phase two at half health: faster, angrier, more slams
+  if (t.boss && !e.enraged && e.hp < e.maxHp / 2) {
+    e.enraged = true; e.state = "roar"; e.st = 0;
+    sfx("roar"); banner("The Warden rages"); shake = 0.8;
+    ud.eyeMat.color.set(C.ember);
+  }
+  const speedMul = e.enraged ? 1.35 : 1;
+
+  if (e.state === "roar") {
+    e.vel.multiplyScalar(Math.exp(-8 * dt));
+    ud.body.rotation.x = -0.5;
+    ud.eyeMat.emissiveIntensity = 14;
+    if (e.st % 0.15 < dt) burst(e.pos.clone().setY(2.5 * t.scale), C.ember, 6, 6, 4);
+    if (e.st > 1.4) { e.state = "chase"; e.cd = 0.3; }
+  } else if (e.state === "stagger" || e.state === "riposte") {
     e.vel.multiplyScalar(Math.exp(-6 * dt));
-    ud.body.rotation.x = -0.4;
+    const long = e.state === "riposte";
+    ud.body.rotation.x = long ? -0.7 : -0.4;
     ud.body.rotation.z = Math.sin(e.st * 30) * 0.08;
-    if (e.st > 0.9) { e.state = "chase"; e.cd = 0.4; }
+    if (long) ud.eyeMat.emissiveIntensity = 0.4; // dazed
+    if (e.st > (long ? 1.6 : 0.9)) { e.state = "chase"; e.cd = 0.4; }
   } else if (e.state === "chase") {
     turn(6);
     const want = t.keep ? (dist < t.keep - 2 ? -1 : dist > t.keep + 2 ? 1 : 0) : dist > (t.atk.range ?? 2) * 0.8 ? 1 : 0;
     const dir = _dir.copy(_to).normalize();
+    // husks fan out around the player instead of queueing behind each other
+    if (e.type === "husk" && dist > 3.5) dir.add(_side.set(-dir.z, 0, dir.x).multiplyScalar(e.flank));
     if (t.keep) dir.add(_side.set(-dir.z, 0, dir.x).multiplyScalar(0.6 * Math.sin(time + e.pos.x))); // casters strafe
-    e.vel.copy(dir).multiplyScalar(t.speed * want);
+    e.vel.copy(dir).normalize().multiplyScalar(t.speed * speedMul * want);
     ud.body.rotation.z = Math.sin(time * 9 + e.pos.x) * 0.06 * Math.abs(want);
     if (player.state !== "dead" && e.cd <= 0) {
-      if (t.slam && dist < t.slam.radius - 0.5 && Math.random() < 0.45) startEnemyAttack(e, "slam");
+      if (t.slam && dist < t.slam.radius - 0.5 && Math.random() < (e.enraged ? 0.65 : 0.4)) startEnemyAttack(e, "slam");
       else if (t.atk.ranged && dist < 22) startEnemyAttack(e, "atk");
       else if (!t.atk.ranged && dist < t.atk.range + 0.6) startEnemyAttack(e, "atk");
     }
@@ -599,12 +801,14 @@ function updateEnemy(e, dt) {
     if (!m.ranged) turn(m.radius ? 0 : 3.5);
     else turn(8);
     e.vel.multiplyScalar(Math.exp(-10 * dt));
-    const k = e.st / m.wind;
+    const k = Math.min(1, e.st / e.windT);
+    // delayed swings: some attacks hold at full wind-up before releasing, punishing panic rolls
+    if (e.hold && k >= 1) ud.body.rotation.y = Math.sin(e.st * 40) * 0.03;
     ud.eyeMat.emissiveIntensity = 2 + k * 10;
     ud.body.rotation.x = -0.3 * k;
     if (ud.arm) ud.arm.rotation.x = m.radius ? -3 * k : -2.2 * k;
     if (e.tele) { e.tele.material.opacity = 0.12 + 0.4 * k; e.tele.position.set(e.pos.x, 0.03, e.pos.z); e.tele.rotation.z = e.facing; }
-    if (e.st >= m.wind) {
+    if (e.st >= e.windT + e.hold) {
       if (m.ranged) { fireOrb(e); e.state = "rec"; e.st = 0; }
       else { e.state = "active"; e.st = 0; e.hit = false; }
     }
@@ -615,10 +819,19 @@ function updateEnemy(e, dt) {
     ud.body.rotation.x = 0.2;
     if (!e.hit) {
       const inRange = m.radius ? dist < m.radius : dist < m.range + 0.5 && Math.abs(angDiff(e.facing, target)) < m.arc / 2;
-      if (inRange) { e.hit = true; hurtPlayer(m.dmg, e.pos); }
+      if (inRange) {
+        e.hit = true;
+        if (hurtPlayer(m.dmg, e.pos, m.radius ? null : e) === "parried") e.vel.set(0, 0, 0);
+      }
     }
-    if (m.radius && !e.slammed) { e.slammed = true; burst(e.pos.clone().setY(0.2), C.ember, 40, 9, 2); shake = Math.max(shake, 0.6); }
-    if (e.st >= m.active) { e.state = "rec"; e.st = 0; if (e.tele) e.tele.visible = false; }
+    if (m.radius && !e.slammed) {
+      e.slammed = true;
+      burst(e.pos.clone().setY(0.2), C.ember, 40, 9, 2);
+      shake = Math.max(shake, 0.6);
+      sfx("slam");
+      runeFlash = 1; // arena runes flare on impact
+    }
+    if (e.st >= m.active && e.state === "active") { e.state = "rec"; e.st = 0; if (e.tele) e.tele.visible = false; }
   } else if (e.state === "rec") {
     e.vel.multiplyScalar(Math.exp(-8 * dt));
     if (ud.arm) ud.arm.rotation.x = 0.6 * (1 - e.st / e.move.rec);
@@ -644,6 +857,8 @@ function updateEnemy(e, dt) {
 function startEnemyAttack(e, kind) {
   const m = e.t[kind];
   e.move = m; e.state = "wind"; e.st = 0; e.slammed = false;
+  e.windT = m.wind / (e.enraged ? 1.25 : 1);
+  e.hold = e.type === "brute" && Math.random() < 0.4 ? rand(0.35, 0.6) : e.enraged && Math.random() < 0.3 ? 0.4 : 0;
   if (m.ranged) return;
   // one ground telegraph per attack kind, built once and reused
   e.teles ??= {};
@@ -661,17 +876,32 @@ function fireOrb(e) {
   const to = player.pos.clone().setY(1.1).addScaledVector(player.vel, 0.25); // leads a little
   g.position.copy(from);
   scene.add(g);
-  orbs.push({ g, vel: to.sub(from).normalize().multiplyScalar(12), life: 3.5, dmg: e.move.dmg });
+  orbs.push({ g, vel: to.sub(from).normalize().multiplyScalar(12), life: 3.5, dmg: e.move.dmg, owner: e });
+  sfx("orb");
 }
 
+const REFLECT = { dmg: 40, poise: 40 };
 function updateOrbs(dt) {
   for (const o of orbs) {
     o.life -= dt;
     o.g.position.addScaledVector(o.vel, dt);
     o.g.children[1].rotation.x += dt * 8; o.g.children[1].rotation.y += dt * 6;
-    if (o.g.position.distanceTo(_v.copy(player.pos).setY(1.1)) < 0.9 && player.state !== "dead") {
-      hurtPlayer(o.dmg, o.g.position);
-      if (!player.iframe) o.life = 0;
+    if (o.reflected) {
+      // a parried orb flies back and hits its caster (or anyone in the way)
+      for (const e of enemies) {
+        if (e.dead || e.state === "spawn" || o.g.position.distanceTo(_v.copy(e.pos).setY(1.4 * e.t.scale)) > 1.2 * e.t.scale) continue;
+        hitEnemy(e, REFLECT, o.vel.clone().setY(0).normalize());
+        o.life = 0;
+        break;
+      }
+    } else if (o.g.position.distanceTo(_v.copy(player.pos).setY(1.1)) < 0.9 && player.state !== "dead") {
+      const r = hurtPlayer(o.dmg, o.g.position);
+      if (r === "parried") {
+        o.reflected = true; o.life = 3;
+        const target = o.owner && !o.owner.dead ? o.owner.pos.clone().setY(1.6) : o.g.position.clone().sub(o.vel);
+        o.vel.copy(target.sub(o.g.position).normalize().multiplyScalar(18));
+        o.g.children[0].material.color.set(C.gold);
+      } else if (r !== "dodged") o.life = 0;
     }
     if (o.life <= 0) { scene.remove(o.g); burst(o.g.position, C.purple, 8, 3, 1); }
   }
@@ -681,11 +911,13 @@ function updateOrbs(dt) {
 // ============================================================ waves
 function nextWave() {
   wave++;
-  const boss = wave % 5 === 0;
-  banner(boss ? "The Warden awakens" : `Wave ${wave}`);
+  const isBoss = wave % 5 === 0;
+  bossWave.on = isBoss;
+  banner(isBoss ? "The Warden awakens" : `Wave ${wave}`);
+  sfx(isBoss ? "roar" : "wave");
   hud.wave.textContent = `Wave ${wave}`;
   const list = [];
-  if (boss) { list.push("warden"); for (let i = 0; i < Math.floor(wave / 5); i++) list.push("husk"); }
+  if (isBoss) { list.push("warden"); for (let i = 0; i < Math.floor(wave / 5); i++) list.push("husk"); }
   else {
     for (let i = 0; i < 2 + wave; i++) list.push("husk");
     for (let i = 0; i < Math.floor(wave / 2); i++) list.push("brute");
@@ -734,26 +966,52 @@ function frame(now) {
     updateOrbs(dt);
     multT -= dt;
     if (multT <= 0) mult = 1;
-    if (game === "play" && waveTimer < 0 && pendingSpawns === 0 && enemies.every((e) => e.dead)) {
-      waveTimer = 2.5; // wave cleared: refill a flask, bank a bonus, then the next wave
-      player.flasks = Math.min(3, player.flasks + 1);
+    if (game === "play" && waveTimer < 0 && !boonDue && pendingSpawns === 0 && enemies.every((e) => e.dead)) {
+      boonDue = 1.6; // wave cleared: refill a flask, bank a bonus, then pick a boon
+      player.flasks = Math.min(player.maxFlasks, player.flasks + 1);
       score += 250 * wave;
+      banner("Wave cleared");
     }
+    if (boonDue > 0) { boonDue -= dt; if (boonDue <= 0) { boonDue = 0; if (game === "play") TEST ? (waveTimer = 1) : offerBoons(); } }
     if (waveTimer > 0) { waveTimer -= dt; if (waveTimer <= 0) nextWave(); }
     updateCamera(real);
     drawHud();
+  } else if (game === "boon" || game === "paused") {
+    updateCamera(real); // hold the scene still behind the menu
   } else {
     // title / paused / dead: slow orbit
     cam.yaw += real * 0.12;
-    const off = new THREE.Vector3(Math.sin(cam.yaw) * 22, 9, Math.cos(cam.yaw) * 22);
-    camera.position.lerp(off, 1 - Math.exp(-3 * real));
+    camera.position.lerp(_off.set(Math.sin(cam.yaw) * 22, 9, Math.cos(cam.yaw) * 22), 1 - Math.exp(-3 * real));
     camera.lookAt(0, 1, 0);
     player.mesh.position.copy(player.pos);
   }
   updateParticles(real);
-  renderer.render(scene, camera);
+  updateEmbers(real);
+  // sky reddens for the boss; runes flare when the Warden slams
+  skyCol.lerp(bossWave.on ? bossSky : calmSky, 1 - Math.exp(-1.5 * real));
+  scene.background.copy(skyCol);
+  scene.fog.color.copy(skyCol);
+  runeFlash = Math.max(0, runeFlash - real * 1.5);
+  runeRing.material.opacity = 0.35 + runeFlash * 0.65;
+  runeRing.material.color.lerpColors(PURPLE_C, EMBER_C, Math.max(runeFlash, bossWave.on ? 0.5 : 0));
+  embers.material.size = bossWave.on ? 0.5 : 0.35;
+  governBloom(real);
+  if (useBloom) composer.render(); else renderer.render(scene, camera);
 }
 let pendingSpawns = 0; // spawns scheduled for this wave but not in the arena yet
+let boonDue = 0, runeFlash = 0;
+const bossWave = { on: false };
+const PURPLE_C = new THREE.Color(C.purple), EMBER_C = new THREE.Color(C.ember);
+
+// drop bloom if the frame rate sags for a few seconds (it's the most expensive effect)
+let gFrames = 0, gTime = 0;
+function governBloom(real) {
+  if (!useBloom || game !== "play") { gFrames = gTime = 0; return; }
+  gFrames++; gTime += real;
+  if (gTime < 4) return;
+  if (gFrames / gTime < 40) { useBloom = false; console.info("Ember Arena: bloom off to keep the frame rate up"); }
+  gFrames = gTime = 0;
+}
 
 // ============================================================ game flow
 let runId = 0;
@@ -763,9 +1021,13 @@ function reset() {
   for (const e of enemies) { scene.remove(e.mesh); for (const k in e.teles ?? {}) scene.remove(e.teles[k]); }
   for (const o of orbs) scene.remove(o.g);
   enemies = []; orbs = []; lock = null;
-  Object.assign(player, { hp: 100, st: 100, flasks: 3, state: "free", t: 0, buffer: null, combo: 0, facing: Math.PI });
+  Object.assign(player, { hp: 100, maxHp: 100, st: 100, flasks: 3, maxFlasks: 3, state: "free", t: 0, buffer: null, combo: 0, facing: Math.PI });
+  player.buffs = { dmg: 1, rollCost: 1, taken: 1, regen: 1, speed: 1, lifesteal: 0, emberBlade: false, riposte: 3 };
+  taken.clear();
   player.pos.set(0, 0, 6); player.vel.set(0, 0, 0);
-  wave = 0; score = 0; mult = 1; kills = 0; waveTimer = 1.2;
+  wave = 0; score = 0; mult = 1; kills = 0; waveTimer = 1.2; boonDue = 0; bossWave.on = false;
+  hud.flaskCount = -1;
+  $("#boons").hidden = true;
   cam.yaw = 0; cam.pitch = 0.42;
 }
 function play() {
@@ -775,7 +1037,7 @@ function play() {
   last = performance.now();
   if (!TEST) canvas.requestPointerLock?.();
 }
-function start() { reset(); play(); }
+function start() { unlockAudio(); reset(); play(); }
 function pause() {
   if (game !== "play") return;
   game = "paused";
@@ -799,4 +1061,4 @@ $("#best").textContent = best ? `Best score: ${best.toLocaleString()}` : "";
 reset();
 player.pos.set(0, 0, 0);
 requestAnimationFrame(frame);
-if (TEST) window.__g = { get player() { return player; }, get enemies() { return enemies; }, get wave() { return wave; }, get score() { return score; }, start, queue, keys, toggleLock, spawn, get game() { return game; } };
+if (TEST) window.__g = { get player() { return player; }, get enemies() { return enemies; }, get wave() { return wave; }, get score() { return score; }, start, queue, keys, toggleLock, spawn, get game() { return game; }, offerBoons, pickBoon, nextWave, get orbs() { return orbs; }, get useBloom() { return useBloom; } };
